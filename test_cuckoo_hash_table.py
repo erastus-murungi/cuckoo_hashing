@@ -9,7 +9,7 @@ from cuckoo_hash_table import CuckooHashTable
 
 @pytest.fixture
 def num_items():
-    return 10000
+    return 100000
 
 
 def test_with_random_insertions(num_items):
