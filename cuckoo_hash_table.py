@@ -1,4 +1,3 @@
-import random
 import struct
 from array import array
 from collections.abc import MutableMapping
@@ -12,10 +11,6 @@ NO_ENTRY: Final[int] = -1
 WORD_SIZE: Final[int] = 64  # word size
 
 is64: Final[bool] = (struct.calcsize("P") * 8) == 64
-
-
-def usable_fraction(x: int) -> int:
-    return x >> 1
 
 
 @dataclass(slots=True)
@@ -103,8 +98,12 @@ class CuckooHashTable(MutableMapping):
         self._num_entries += 1
         self._entries.append(Entry(key, value))
 
+    @staticmethod
+    def usable_fraction(x: int) -> int:
+        return x >> 1
+
     def _should_grow_index(self) -> bool:
-        return len(self._entries) >= usable_fraction(self.n_buckets)
+        return len(self._entries) >= self.usable_fraction(self.n_buckets)
 
     def _insert_entry_index(self, key, entry_index: int):
         if self._should_grow_index():
@@ -201,32 +200,3 @@ class CuckooHashTable(MutableMapping):
                 f"{index:<10} {key!r:<15} | {value!r}"
                 for index, (key, value) in enumerate(self.items())
             )
-
-
-if __name__ == "__main__":
-    import string
-
-    import numpy as np
-
-    # np.random.seed(0)
-    # random.seed(0)
-
-    n = 15000
-    rand_nums = np.random.randint(1, 1000000, n)
-    rand_strings = (
-        "".join(random.choice(string.ascii_letters) for _ in range(10))
-        for _ in range(n)
-    )
-    ck = CuckooHashTable()
-    for i, (_key, v) in enumerate(zip(rand_nums, rand_strings)):
-        if i and i % 5 == 0:
-            print(f"pop {i}: {(_key, v)} n_buckets = {ck.n_buckets}")
-            ck.pop(rand_nums[i - 1])
-            assert rand_nums[i - 1] not in ck
-            continue
-        print(f"insert {i}: {(_key, v)} n_buckets = {ck.n_buckets}")
-        ck[_key] = v
-
-        assert _key in ck, _key
-        assert -_key not in ck
-    print(ck)
