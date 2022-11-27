@@ -1,6 +1,7 @@
 import random
 from array import array
 from collections.abc import MutableMapping
+from copy import deepcopy
 from dataclasses import dataclass
 from itertools import cycle
 from pprint import pprint
@@ -67,7 +68,6 @@ class CuckooHashTable(MutableMapping):
         "_entries",
         "_num_entries",
         "_hash_family",
-        "_rehashing_depth_limit",
         "_rehashes",
         "_allowed_rehash_attempts",
         "_usable_fraction",
@@ -76,7 +76,6 @@ class CuckooHashTable(MutableMapping):
     def __init__(
         self,
         *,
-        rehashing_depth_limit: int = 150,
         allowed_rehash_attempts: int = 20,
         usable_fraction: float = 0.5,
         hash_family: HashFamily = None,
@@ -84,34 +83,33 @@ class CuckooHashTable(MutableMapping):
         self._hash_family = hash_family or HashFamilyTabulation(2)
         self._hash_family.gen()
 
-        self._gen_index(CuckooHashTable.MIN_SIZE)
         self._entries = []
 
         self._num_entries = 0
-        self._rehashing_depth_limit = rehashing_depth_limit
         self._rehashes = 0
         self._allowed_rehash_attempts = allowed_rehash_attempts
         self._usable_fraction = usable_fraction
+        self._gen_index(CuckooHashTable.MIN_SIZE)
 
     @property
-    def index_size(self) -> int:
+    def entries_per_bucket(self) -> int:
         return len(self.buckets[0])
 
-    def _gen_index(self, size=None, growth_factor=2):
-        if size is None:
-            size = int(self.index_size * growth_factor)
-        capacity = size * self._hash_family.size()
+    def _gen_index(self, entries_per_bucket=None, growth_factor: float = 2):
+        if entries_per_bucket is None:
+            entries_per_bucket = int(self.entries_per_bucket * growth_factor)
+        capacity = entries_per_bucket * self._hash_family.size()
 
         if capacity <= 0x7F:  # signed 8-bit
-            buckets = array("b", [CuckooHashTable.NO_ENTRY]) * size
+            buckets = array("b", [CuckooHashTable.NO_ENTRY]) * entries_per_bucket
         elif capacity <= 0x7FFF:  # signed 16-bit
-            buckets = array("h", [CuckooHashTable.NO_ENTRY]) * size
+            buckets = array("h", [CuckooHashTable.NO_ENTRY]) * entries_per_bucket
         elif capacity <= 0x7FFFFFFF:  # signed 32-bit
-            buckets = array("l", [CuckooHashTable.NO_ENTRY]) * size
+            buckets = array("l", [CuckooHashTable.NO_ENTRY]) * entries_per_bucket
         elif capacity <= 0x7FFFFFFFFFFFFFFF:  # signed 64-bit
-            buckets = array("q", [CuckooHashTable.NO_ENTRY]) * size
+            buckets = array("q", [CuckooHashTable.NO_ENTRY]) * entries_per_bucket
         else:
-            buckets = [CuckooHashTable.NO_ENTRY] * size
+            buckets = [CuckooHashTable.NO_ENTRY] * entries_per_bucket
         self.buckets = (buckets,) + tuple(
             buckets[:] for _ in range(self._hash_family.size() - 1)
         )
@@ -119,7 +117,7 @@ class CuckooHashTable(MutableMapping):
     def _get_entry_specific_column(
         self, column_index: int, key: Hashable
     ) -> Optional[Entry]:
-        offset = self._hash_family(column_index, key, self.index_size)
+        offset = self._hash_family(column_index, key, self.entries_per_bucket)
         entry_index = self.buckets[column_index][offset]
         if (
             entry_index != CuckooHashTable.NO_ENTRY
@@ -150,7 +148,7 @@ class CuckooHashTable(MutableMapping):
         self._entries.append(Entry(key, value))
 
     def load_factor(self) -> int:
-        return len(self._entries) / (self._hash_family.size() * self.index_size)
+        return len(self._entries) / (self._hash_family.size() * self.entries_per_bucket)
 
     def _should_grow_index(self) -> bool:
         return self.load_factor() >= self._usable_fraction
@@ -182,7 +180,7 @@ class CuckooHashTable(MutableMapping):
         self, key, entry_index: int, column_index: int
     ) -> Optional[tuple[Entry, int]]:
         index = self.buckets[column_index]
-        offset = self._hash_family(column_index, key, self.index_size)
+        offset = self._hash_family(column_index, key, self.entries_per_bucket)
 
         if index[offset] == CuckooHashTable.NO_ENTRY:
             index[offset] = entry_index
@@ -199,7 +197,10 @@ class CuckooHashTable(MutableMapping):
     def _insert(self, key: Hashable, entry_index: int) -> bool:
         column_index = 0
         find_next = self._get_eviction_policy()
-        for _ in range(self._rehashing_depth_limit):
+        max_insert_failures = max(
+            self._hash_family.size() * 2, 6 * self._num_entries.bit_length()
+        )
+        for _ in range(max_insert_failures):
             maybe_key_entry_index = self._maybe_get_key(key, entry_index, column_index)
             if maybe_key_entry_index is None:
                 return False
@@ -218,7 +219,7 @@ class CuckooHashTable(MutableMapping):
         if expand:
             self._gen_index()
         else:
-            self._gen_index(self.index_size)
+            self._gen_index(self.entries_per_bucket)
 
         self._rehashes += 1
         self._hash_family.gen()
@@ -229,7 +230,7 @@ class CuckooHashTable(MutableMapping):
 
     def __delitem__(self, key: Hashable):
         for column_index, index in enumerate(self.buckets):
-            offset = self._hash_family(column_index, key, self.index_size)
+            offset = self._hash_family(column_index, key, self.entries_per_bucket)
             entry_index = index[offset]
             if entry_index != CuckooHashTable.NO_ENTRY and self._entries[
                 entry_index
@@ -270,10 +271,22 @@ class CuckooHashTable(MutableMapping):
 class CuckooHashTableDAry(CuckooHashTable):
     DEFAULT_D = 4
 
-    def __init__(self, hash_family=None):
+    def __init__(self, hash_family=None, usable_fraction=0.9):
         super().__init__(
             hash_family=hash_family or HashFamilyTabulation(self.DEFAULT_D),
-            usable_fraction=0.9,
+            usable_fraction=usable_fraction,
+        )
+
+
+class CuckooHashTableDAryRandomWalk(CuckooHashTableDAry):
+    """
+    A variation of cuckoo hashing where the table to evict and element from is chosen at random
+    """
+
+    def __init__(self, hash_family=None, usable_fraction=0.9):
+        super().__init__(
+            hash_family=hash_family or HashFamilyTabulation(self.DEFAULT_D),
+            usable_fraction=usable_fraction,
         )
 
     def _get_eviction_policy(self):
@@ -284,3 +297,62 @@ class CuckooHashTableDAry(CuckooHashTable):
             return index
 
         return random_walk_policy
+
+
+class CuckooHashTableBucketed(CuckooHashTable):
+    DEFAULT_SLOTS_PER_BUCKET = 2
+
+    def __init__(self, slots_per_bucket: Optional[int] = None):
+        self.slots_per_bucket = slots_per_bucket or self.DEFAULT_SLOTS_PER_BUCKET
+        super().__init__()
+
+    def _gen_index(self, entries_per_bucket=None, growth_factor: float = 2):
+        if entries_per_bucket is None:
+            entries_per_bucket = int(self.entries_per_bucket * growth_factor)
+        capacity = entries_per_bucket * self._hash_family.size()
+        type_codes = ["b", "h", "l", "q"]
+        item_sizes = [0x7F, 0x7FFF, 0x7FFFFFFF, 0x7FFFFFFFFFFFFFFF]
+        index = 0
+        while capacity >= item_sizes[index]:
+            index += 1
+        buckets = [array(type_codes[index]) for _ in range(entries_per_bucket)]
+        self.buckets = (buckets,) + tuple(
+            deepcopy(buckets) for _ in range(self._hash_family.size() - 1)
+        )
+
+    def _get_entry_specific_column(
+        self, column_index: int, key: Hashable
+    ) -> Optional[Entry]:
+        offset = self._hash_family(column_index, key, self.entries_per_bucket)
+        slots = self.buckets[column_index][offset]
+        for entry_index in slots:
+            if self._entries[entry_index] is not None and self._entries[
+                entry_index
+            ].match_key(key):
+                return self._entries[entry_index]
+        return None
+
+    def _maybe_get_key(
+        self, key, entry_index: int, column_index: int
+    ) -> Optional[tuple[Entry, int]]:
+        offset = self._hash_family(column_index, key, self.entries_per_bucket)
+        slots = self.buckets[column_index][offset]
+        if len(slots) == self.slots_per_bucket:
+            next_entry_index = slots[-1]
+            slots[-1] = entry_index
+            return self._entries[next_entry_index].key, next_entry_index
+        else:
+            slots.append(entry_index)
+            return None
+
+    def __delitem__(self, key: Hashable):
+        for column_index, index in enumerate(self.buckets):
+            offset = self._hash_family(column_index, key, self.entries_per_bucket)
+            slots = index[offset]
+            for entry_index in slots[:]:
+                if self._entries[entry_index].match_key(key):
+                    slots.remove(entry_index)
+                    self._entries[entry_index] = None
+                    self._num_entries -= 1
+                    return True
+        raise KeyError(f"{key} not found")

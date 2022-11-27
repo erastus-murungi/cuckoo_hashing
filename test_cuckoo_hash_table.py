@@ -3,7 +3,12 @@ import string
 
 import numpy as np
 
-from cuckoo_hash_table import CuckooHashTable, CuckooHashTableDAry
+from cuckoo_hash_table import (
+    CuckooHashTable,
+    CuckooHashTableDAryRandomWalk,
+    CuckooHashTableDAry,
+    CuckooHashTableBucketed,
+)
 
 
 class TestCuckooHashTable:
@@ -14,15 +19,13 @@ class TestCuckooHashTable:
         for _ in range(num_items)
     )
 
-    def test_with_random_insertions(self):
-        table = CuckooHashTable()
+    def _test_with_random_insertions(self, table):
         for key, value in zip(self.random_ints, self.random_strings):
             table[key] = value
             assert key in table, key
             assert -key not in table
 
-    def test_with_random_insertions_then_deletions(self):
-        table = CuckooHashTable()
+    def _test_with_random_insertions_then_deletions(self, table):
         for index, (key, value) in enumerate(
             zip(self.random_ints, self.random_strings)
         ):
@@ -34,22 +37,32 @@ class TestCuckooHashTable:
                 assert key in table, key
                 assert -key not in table
 
-    def test_dary_cuckoo_with_random_insertions(self):
-        table = CuckooHashTableDAry()
-        for key, value in zip(self.random_ints, self.random_strings):
-            table[key] = value
-            assert key in table, key
-            assert -key not in table
+    def test_cuckoo_dary_cycle_eviction_policy_with_random_insertions(self):
+        self._test_with_random_insertions(CuckooHashTableDAry())
 
-    def test_dary_cuckoo_with_random_insertions_then_deletions(self):
-        table = CuckooHashTableDAry()
-        for index, (key, value) in enumerate(
-            zip(self.random_ints, self.random_strings)
-        ):
-            if index and index % 5 == 0:
-                del table[self.random_ints[index - 1]]
-                assert self.random_ints[index - 1] not in table
-            else:
-                table[key] = value
-                assert key in table, key
-                assert -key not in table
+    def test_cuckoo_dary_cycle_eviction_policy_with_random_insertions_then_deletions(
+        self,
+    ):
+        self._test_with_random_insertions_then_deletions(CuckooHashTableDAry())
+
+    def test_cuckoo_dary_random_walk_eviction_policy_with_random_insertions(self):
+        self._test_with_random_insertions(CuckooHashTableDAryRandomWalk())
+
+    def test_cuckoo_dary_random_walk_eviction_policy_with_random_insertions_then_deletions(
+        self,
+    ):
+        self._test_with_random_insertions_then_deletions(
+            CuckooHashTableDAryRandomWalk()
+        )
+
+    def test_cuckoo_with_random_insertions(self):
+        self._test_with_random_insertions(CuckooHashTable())
+
+    def test_cuckoo_with_random_insertions_then_deletions(self):
+        self._test_with_random_insertions_then_deletions(CuckooHashTable())
+
+    def test_cuckoo_bucketed_with_random_insertions(self):
+        self._test_with_random_insertions(CuckooHashTableBucketed())
+
+    def test_cuckoo_bucketed_with_random_insertions_then_deletions(self):
+        self._test_with_random_insertions_then_deletions(CuckooHashTableBucketed())
