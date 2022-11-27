@@ -9,14 +9,14 @@ p: Final[int] = 0x1FFFFFFFFFFFFFFF  # Mersenne prime (2^61 - 1)
 WORD_SIZE: Final[int] = 64  # word size
 
 
-def gen_multiplier_increment_pair(
+def gen_multiplier_increment_tuples(
     count: int, multiplier_gen: Callable[[], int]
 ) -> set[tuple[int, int]]:
-    pairs = set()
-    while len(pairs) != count:
+    tuples = set()
+    while len(tuples) != count:
         increment = random.randint(0, p)
-        pairs.add((multiplier_gen(), increment))
-    return pairs
+        tuples.add((multiplier_gen(), increment))
+    return tuples
 
 
 class HashFamily(ABC):
@@ -47,9 +47,12 @@ class HashFamilyModular(HashFamily):
         return h % table_size
 
     def gen(self):
-        self.a, self.b = gen_multiplier_increment_pair(
+        self.a, self.b = gen_multiplier_increment_tuples(
             self.size(), lambda: random.randint(1, p)
         )
+
+    def __repr__(self):
+        return f"(ax + b) % p where a = {self.a}, b = {self.b}, p = {p}"
 
 
 class HashFamilyShift(HashFamily):
@@ -81,7 +84,7 @@ class HashFamilyShift(HashFamily):
         return h >> WORD_SIZE
 
     def gen(self):
-        self.a, self.b = gen_multiplier_increment_pair(
+        self.a, self.b = gen_multiplier_increment_tuples(
             self.size(), lambda: self.get_rand_odd(WORD_SIZE)
         )
 
@@ -120,3 +123,31 @@ class HashFamilyTabulation(HashFamily):
         self.tables = np.random.randint(
             0, 0xFFFFFFFFFFFFFFFF, size=(self.size(), 8, 256), dtype=np.uint64
         )
+
+    def __repr__(self):
+        return f"Tabulation hashing where T = {self.tables}"
+
+
+class HashFamilyPolynomial(HashFamily):
+    """
+    https://cseweb.ucsd.edu/classes/fa13/cse290-b/notes-lecture2.pdf
+    """
+
+    def __init__(self, size: int, k: int = 3):
+        super().__init__(size)
+        self.coefficients = None
+        self.k = k
+
+    def gen(self):
+        self.coefficients = np.random.randint(
+            1, np.iinfo(np.uint64).max, dtype=np.uint64, size=self.k
+        )
+
+    def __call__(self, column_index: int, item: Hashable, table_size: int) -> int:
+        hash_item = hash(item)
+        xi = hash_item
+        res = 0
+        for coefficient in self.coefficients:
+            res = res + (coefficient * xi) % p
+            xi += hash_item
+        return res % table_size
