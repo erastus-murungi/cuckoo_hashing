@@ -28,7 +28,7 @@ class HashFamily(ABC):
         pass
 
     @abstractmethod
-    def __call__(self, column_index: int, item: Hashable, table_size: int) -> int:
+    def __call__(self, table_index: int, item: Hashable, table_size: int) -> int:
         pass
 
     def size(self):
@@ -41,8 +41,8 @@ class HashFamilyModular(HashFamily):
         self.a = None
         self.b = None
 
-    def __call__(self, column_index, item, table_size):
-        a, b = self.a[column_index], self.b[column_index]
+    def __call__(self, table_index, item, table_size):
+        a, b = self.a[table_index], self.b[table_index]
         h = (a * hash(item) + b) & p
         return h % table_size
 
@@ -72,14 +72,14 @@ class HashFamilyShift(HashFamily):
     def is_power_of_two(x: int) -> int:
         return not (x & (x - 1))
 
-    def __call__(self, column_index, item, table_size):
+    def __call__(self, table_index, item, table_size):
         assert self.is_power_of_two(
             table_size
         ), f"table size must be a power of 2, {table_size} is not"
 
         m = table_size.bit_length() - 1
         mask = (1 << (WORD_SIZE + m)) - 1
-        a, b = self.a[column_index], self.b[column_index]
+        a, b = self.a[table_index], self.b[table_index]
         h = (a * hash(item) + b) & mask
         return h >> WORD_SIZE
 
@@ -94,7 +94,7 @@ class HashFamilyTabulation(HashFamily):
         super().__init__(size)
         self.tables: np.ndarray = np.empty(0)
 
-    def __call__(self, column_index: int, item: Hashable, table_size: int) -> int:
+    def __call__(self, table_index: int, item: Hashable, table_size: int) -> int:
         x = hash(item)
         h0 = x & 0xFF
         h1 = (x >> 8) & 0xFF
@@ -104,7 +104,7 @@ class HashFamilyTabulation(HashFamily):
         h5 = (x >> 40) & 0xFF
         h6 = (x >> 48) & 0xFF
         h7 = (x >> 56) & 0xFF
-        t = self.tables[column_index]
+        t = self.tables[table_index]
         return (
             int(
                 t[0][h0]
@@ -143,7 +143,7 @@ class HashFamilyPolynomial(HashFamily):
             1, np.iinfo(np.uint64).max, dtype=np.uint64, size=self.k
         )
 
-    def __call__(self, column_index: int, item: Hashable, table_size: int) -> int:
+    def __call__(self, table_index: int, item: Hashable, table_size: int) -> int:
         hash_item = hash(item)
         xi = hash_item
         res = 0
