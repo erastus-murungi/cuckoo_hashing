@@ -210,7 +210,9 @@ class CuckooHashTable(MutableMapping):
         # the capacity (total number of slots) in our hashtable
         return self._buckets_per_table * self._hash_family.size()
 
-    def _update_buckets_per_table(self, buckets_per_table: Optional[int], growth_factor: float):
+    def _update_buckets_per_table(
+        self, buckets_per_table: Optional[int], growth_factor: float
+    ):
         # updates _buckets_per_table to be the correct value
         self._buckets_per_table = (
             int(self._buckets_per_table * growth_factor)
@@ -226,7 +228,9 @@ class CuckooHashTable(MutableMapping):
             index += 1
         return type_codes[index]
 
-    def _gen_tables(self, buckets_per_table=None, growth_factor: float = 2):
+    def _gen_tables(
+        self, buckets_per_table: Optional[int] = None, growth_factor: float = 2
+    ):
         """
         Generates (d=2) tables to store our entry indices and stores them in self._tables
 
@@ -480,6 +484,11 @@ class CuckooHashTable(MutableMapping):
         the next table index to try and insert an evicted entry index
 
         The default policy just cycles through all the tables, ignoring the current table index
+
+        Returns
+        -------
+        Callable[[int], int]
+            A eviction policy
         """
         c = cycle(range(self._hash_family.size()))
         return lambda table_index: next(c)
@@ -547,10 +556,14 @@ class CuckooHashTable(MutableMapping):
         self._hash_family.gen()
 
         for entry_index, entry in self._enumerate_entries():
-            if self._insert_entry_index(entry.key, entry_index):
+            if self._insert(entry.key, entry_index):
                 # some other rehash was triggered while this rehash isn't over
                 # me must return to prevent erroneous values in our tables
                 return
+
+    def _shrink_table(self):
+
+        pass
 
     def __delitem__(self, key: Hashable):
         for table_index, table in enumerate(self._tables):
@@ -655,7 +668,7 @@ class CuckooHashTableBucketed(CuckooHashTable):
     Uses 2 slots per bucket by default
     """
 
-    DEFAULT_SLOTS_PER_BUCKET = 2
+    DEFAULT_SLOTS_PER_BUCKET = 3
 
     __slots__ = "_slots_per_bucket"
 
@@ -749,3 +762,103 @@ class CuckooHashTableBucketed(CuckooHashTable):
                     return True
 
         raise KeyError(f"{key} not found")
+
+
+class CuckooHashTableStashed(CuckooHashTable):
+    """
+    https://link.springer.com/content/pdf/10.1007/s00453-013-9840-x.pdf
+
+
+    """
+
+    __slots__ = ("_stash", "_max_stash_size", "_should_try_insert_stashed_keys")
+
+    def __init__(self, max_stash_size: int = 10):
+        """
+
+        Notes
+        -----
+        The reason for having ``_should_try_insert_stashed_items``
+
+        Kirsch et al. [13] propose reinserting all stash keys at the beginning of the first
+        insert operation following a delete operation. Each such insertion takes time
+        maxloop = O(log n) in the worst-case. We know that
+        the stash is empty with probability 1 − O(1/n). Thus, the contribution of the time
+        needed to reinsert all stash keys to the expected insertion time is O((log n)/n) =
+        o(1) using our class of hash functions.
+
+        References
+        ----------
+        A. Kirsch, M. Mitzenmacher, and U. Wieder.
+        More Robust Hashing: Cuckoo Hashing with a Stash.
+        SIAM Journal on Computing, 39(4).
+
+        """
+        super().__init__()
+        self._stash: list[SupportsIndex] = []
+        self._max_stash_size: int = max_stash_size
+        self._should_try_insert_stashed_keys: bool = False
+
+    def _get_max_insert_failures(self):
+        return (self._max_stash_size + 1) * self._num_entries.bit_length()
+
+    def _try_insert_stashed_keys(self):
+        if self._should_try_insert_stashed_keys:
+            for entry_index in self._stash:
+                self._insert_entry_index(self._entries[entry_index].key, entry_index)
+        self._should_try_insert_stashed_keys = False
+
+    # noinspection DuplicatedCode
+    def _insert(self, key: Hashable, entry_index: SupportsIndex) -> bool:
+        find_next = self._get_eviction_policy()
+        max_insert_failures: int = self._get_max_insert_failures()
+
+        table_index = 0
+        for _ in range(max_insert_failures):
+            evicted_entry_index = self.try_insert_entry_index_into_specific_table(
+                key, entry_index, table_index
+            )
+            if evicted_entry_index is None:
+                return False
+
+            key, entry_index = (
+                self._entries[evicted_entry_index].key,
+                evicted_entry_index,
+            )
+            table_index = find_next(table_index)
+
+        # this is really the only big difference
+        if len(self._stash) < self._max_stash_size:
+            self._stash.append(entry_index)
+            return False
+
+        self._rehash(expand=self._rehashes >= self._allowed_rehash_attempts)
+        return True
+
+    def _get_entry(self, key: Hashable) -> Optional[Entry]:
+        if (entry := super(CuckooHashTableStashed, self)._get_entry(key)) is None:
+            for entry_index in self._stash:
+                if self._entry_at_index_matches_key(entry_index, key):
+                    return self._entries[entry_index]
+        return entry
+
+    def __delitem__(self, key):
+        try:
+            super(CuckooHashTableStashed, self).__delitem__(key)
+            self._should_try_insert_stashed_keys = True
+        except KeyError as e:
+            for entry_index in self._stash[:]:
+                if self._entry_at_index_matches_key(entry_index, key):
+                    self._should_try_insert_stashed_keys = True
+                    return self._stash.remove(entry_index)
+            raise e
+
+    def __setitem__(self, key: Hashable, value: Any):
+        if (entry := self._get_entry(key)) is not None:
+            # overwrite old value
+            entry.value = value
+        else:
+            self._gen_and_append_entry(key, value)
+            self._insert_entry_index(key, len(self._entries) - 1)
+            self._try_insert_stashed_keys()
+            self._rehashes = 0

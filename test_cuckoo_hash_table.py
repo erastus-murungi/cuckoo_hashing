@@ -8,11 +8,12 @@ from cuckoo_hash_table import (
     CuckooHashTableBucketed,
     CuckooHashTableDAry,
     CuckooHashTableDAryRandomWalk,
+    CuckooHashTableStashed,
 )
 
 
 class TestCuckooHashTable:
-    num_items = 500_00
+    num_items = 100_000
     random_ints = np.random.randint(1, 1000000, num_items)
     random_strings = tuple(
         "".join(random.choice(string.ascii_letters) for _ in range(10))
@@ -66,3 +67,9 @@ class TestCuckooHashTable:
 
     def test_cuckoo_bucketed_with_random_insertions_then_deletions(self):
         self._test_with_random_insertions_then_deletions(CuckooHashTableBucketed())
+
+    def test_cuckoo_stashed_with_random_insertions(self):
+        self._test_with_random_insertions(CuckooHashTableStashed())
+
+    def test_cuckoo_stashed_with_random_insertions_then_deletions(self):
+        self._test_with_random_insertions_then_deletions(CuckooHashTableStashed())
