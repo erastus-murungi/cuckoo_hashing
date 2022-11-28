@@ -3,16 +3,13 @@ import string
 
 import numpy as np
 
-from cuckoo_hash_table import (
-    CuckooHashTable,
-    CuckooHashTableBucketed,
-    CuckooHashTableDAry,
-    CuckooHashTableDAryRandomWalk,
-)
+from cuckoo_hash_table import (CuckooHashTable, CuckooHashTableBucketed,
+                               CuckooHashTableDAry,
+                               CuckooHashTableDAryRandomWalk)
 
 
 class TestCuckooHashTable:
-    num_items = 50_000
+    num_items = 500_00
     random_ints = np.random.randint(1, 1000000, num_items)
     random_strings = tuple(
         "".join(random.choice(string.ascii_letters) for _ in range(10))
