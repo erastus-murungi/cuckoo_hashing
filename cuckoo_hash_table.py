@@ -4,8 +4,15 @@ from collections.abc import MutableMapping
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import cycle
-from typing import (Any, Callable, Final, Hashable, MutableSequence, Optional,
-                    SupportsIndex)
+from typing import (
+    Any,
+    Callable,
+    Final,
+    Hashable,
+    MutableSequence,
+    Optional,
+    SupportsIndex,
+)
 
 from hash_family import HashFamily, HashFamilyTabulation
 
@@ -110,6 +117,7 @@ class CuckooHashTable(MutableMapping):
         "_allowed_rehash_attempts",
         "_usable_fraction",
         "_max_insert_failures_log_constant",
+        "_buckets_per_table",
     )
 
     def __init__(
@@ -123,24 +131,23 @@ class CuckooHashTable(MutableMapping):
         """
         Parameters
         ----------
-        allowed_rehash_attempts: int, optional
-                                 The number of failed rehashing attempts before the tables are expanded. The
-                                 default is 20 it must be a number >= 1
-        usable_fraction: float, optional
-                                 The maximum load factor of the table. When this is exceeded, the table is expanded
-                                 This value has to be in the range (0, 1). The default is 0.5
-        hash_family: HashFamily, optional
-                                 A hash family. The number of tables is read from the ``hash_family.size()``
-                                 method. This value is optional, by default it is initialized with a tabulation hashing
-                                 family of size 2
-        max_insert_failures_log_constant: int, optional
-                                 Used to control the number of to times before evictions due to inserts trigger
-                                 a rehash.
-                                 max_insert_failures = max_insert_failures_log_constant * log_2(num_entries)
-                                 This implementation expects it to range from mis expected to range from 1 to 1000
-                                 By default it is set to 10
-
+        allowed_rehash_attempts : int, optional
+            The number of failed rehashing attempts before the tables are expanded.
+            The default is 20 it must be a number >= 1
+        usable_fraction : float, optional
+            The maximum load factor of the table. When this is exceeded, the table is expanded.
+            This value has to be in the range (0, 1). The default is 0.5.
+        hash_family : HashFamily, optional
+            A hash family. The number of tables is read from the ``hash_family.size()``
+            method. This value is optional, by default it is initialized with a tabulation hashing
+            family of size 2
+        max_insert_failures_log_constant : int, optional
+            Used to control the number of to times before evictions due to inserts trigger a rehash.
+            max_insert_failures = max_insert_failures_log_constant * log_2(num_entries)
+            This implementation expects it to range from mis expected to range from 1 to 1000
+            By default it is set to 10.
         """
+
         self._hash_family: HashFamily = hash_family or HashFamilyTabulation(2)
         # the gen method must always be invoked before HashFamily objects can be used
         self._hash_family.gen()
@@ -152,7 +159,8 @@ class CuckooHashTable(MutableMapping):
         # a counter to maintain the number of times rehashes have been triggered since the last
         # rehash caused expansion
         self._rehashes: int = 0
-
+        # The number of buckets in each of the d tables we have
+        self._buckets_per_table = CuckooHashTable.MIN_BUCKETS_PER_TABLE
         self._allowed_rehash_attempts: int = allowed_rehash_attempts
         self._usable_fraction: float = usable_fraction
         self._max_insert_failures_log_constant = max_insert_failures_log_constant
@@ -198,9 +206,24 @@ class CuckooHashTable(MutableMapping):
             )
 
     @property
-    def buckets_per_table(self) -> int:
-        """The number of buckets in each of the d tables we have"""
-        return len(self._tables[0])
+    def capacity(self):
+        # the capacity (total number of slots) in our hashtable
+        return self._buckets_per_table * self._hash_family.size()
+
+    def _update_buckets_per_table(self, buckets_per_table, growth_factor):
+        self._buckets_per_table = (
+            int(self._buckets_per_table * growth_factor)
+            if buckets_per_table is None
+            else buckets_per_table
+        )
+
+    def _get_correct_type_code(self) -> str:
+        # find the right word size to using a linear search
+        # we only have 4 item-sizes so there is no need to use binary search
+        index = 0
+        while self.capacity >= item_sizes[index]:
+            index += 1
+        return type_codes[index]
 
     def _gen_tables(self, buckets_per_table=None, growth_factor: float = 2):
         """
@@ -208,20 +231,17 @@ class CuckooHashTable(MutableMapping):
 
         Parameters
         ----------
-
-        buckets_per_table: int, optional
-                           The number of buckets in each table. This number should be a power of 2
-                           when using some hash families such as
-                           multiply-shift scheme described by Dietzfelbinger et al. in 1997.
-                           Typically, this is parameter is expected to be used during initialization to
-                           a specific size
-        growth_factor: float, optional
-                           The factor by which to expand each table, by default it is 2.
+        buckets_per_table : int, optional
+            The number of buckets in each table. This number should be a power of 2 when using some hash families
+            such as multiply-shift scheme described by Dietzfelbinger et al. in 1997.
+            Typically, this is parameter is expected to be used during initialization to a specific size
+        growth_factor : float, optional
+            The factor by which to expand each table, by default it is 2.
 
         Raises
         ------
         ValueError
-                  If both `buckets_per_table` and `growth_factor` are passed into the function
+            If both `buckets_per_table` and `growth_factor` are passed into the function
 
         Returns
         -------
@@ -235,19 +255,9 @@ class CuckooHashTable(MutableMapping):
 
         """
 
-        if buckets_per_table is None:
-            buckets_per_table = int(self.buckets_per_table * growth_factor)
-        # the capacity (total number of slots) in out hashtable
-        capacity = buckets_per_table * self._hash_family.size()
-
-        # find the right word size to using a linear search
-        # we only have 4 item-sizes so there is no need to use binary search
-        index = 0
-        while capacity >= item_sizes[index]:
-            index += 1
-
-        table = array(type_codes[index], [CuckooHashTable.NO_ENTRY]) * buckets_per_table
-
+        self._update_buckets_per_table(buckets_per_table, growth_factor)
+        type_code = self._get_correct_type_code()
+        table = array(type_code, [CuckooHashTable.NO_ENTRY]) * self._buckets_per_table
         # the type of self_tables can be
         self._tables: tuple[Index, ...] | tuple[BucketIndex, ...] = (table,) + tuple(
             table[:] for _ in range(self._hash_family.size() - 1)
@@ -261,15 +271,15 @@ class CuckooHashTable(MutableMapping):
 
         Parameters
         ----------
-        entry_index: SupportsIndex
-                     The index in self._entries of the entry we are inserting
-        candidate_key: Hashable
-                     The key corresponding to ``entry_index``
+        entry_index : SupportsIndex
+            The index in self._entries of the entry we are inserting
+        candidate_key : Hashable
+            The key corresponding to ``entry_index``
 
         Returns
         -------
         True:
-            If there is entry_index points to a entry that is alive and
+            If there is entry_index points to an entry that is alive and
             if the key attached to the entry at index `entry_index` matches candidate_key
         False:
             otherwise
@@ -283,18 +293,22 @@ class CuckooHashTable(MutableMapping):
         """
         Remove an entry from self._entries.
 
+        Parameters
+        ----------
+        entry_inde x: SupportsIndex
+            The index in self._entries of the entry we are inserting
+
+        Returns
+        -------
+        None when the steps are completed
+
+        Notes
+        -----
         This composes of only 2 steps:
 
         1) "Killing" an entry by replacing it with the TOMBSTONE
         2) Decrementing the number of entries by 1
 
-        Parameters
-        ----------
-        entry_index: SupportsIndex
-                     The index in self._entries of the entry we are inserting
-        Returns
-        -------
-        None when the steps are completed
         """
         self._entries[entry_index] = TOMBSTONE
         self._num_entries -= 1
@@ -302,13 +316,52 @@ class CuckooHashTable(MutableMapping):
     def _get_entry_specific_table(
         self, table_index: int, key: Hashable
     ) -> Optional[Entry]:
-        bucket_index = self._hash_family(table_index, key, self.buckets_per_table)
+        """
+        Try to retrieve an entry corresponding to a given key from a specific table
+
+        Parameters
+        ----------
+        table_index : int
+            The index in self._tables of the table from which we are trying to
+            retrieve the entry corresponding the given key
+
+        key : Hashable
+            A key whose corresponding entry we try and retrieve into self._tables[table_index]
+
+        Returns
+        -------
+        Entry
+            The entry if was found
+        None
+            If the entry wasn't found
+        """
+        bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
         entry_index = self._tables[table_index][bucket_index]
         if self._entry_at_index_matches_key(entry_index, key):
             return self._entries[entry_index]
         return None
 
     def _get_entry(self, key: Hashable) -> Optional[Entry]:
+        """
+        Retrieve an entry corresponding to the given key from the dictionary
+
+        Parameters
+        ---------
+        key : Hashable
+            A key whose corresponding entry we try and retrieve into self._tables[table_index]
+
+        Returns
+        -------
+        Entry
+            The entry if was found
+        None
+            If the entry wasn't found
+
+        Notes
+        ----
+        Unlike ``_get_entry_specific_table``, this method looks at the given tables
+        """
+
         for table_index in range(self._hash_family.size()):
             if (
                 maybe_entry := self._get_entry_specific_table(table_index, key)
@@ -325,22 +378,47 @@ class CuckooHashTable(MutableMapping):
         return entry.value
 
     def _gen_and_append_entry(self, key: Hashable, value: Any) -> None:
+        """
+        Create and append an entry to self._entries
+        """
         self._num_entries += 1
         self._entries.append(Entry(key, value))
 
     def load_factor(self) -> int:
-        return len(self._entries) / (self._hash_family.size() * self.buckets_per_table)
+        return len(self._entries) / (self._hash_family.size() * self._buckets_per_table)
 
     def _should_grow_table(self) -> bool:
+        """
+        Return True if we should grow our table
+
+        We decide True if our load factor is >= the usable fraction
+
+        Returns
+        ------
+        True
+            If we should grow our table
+        False:
+            Otherwise
+        """
         return self.load_factor() >= self._usable_fraction
 
-    def _insert_entry_index(self, key: Hashable, entry_index: int) -> bool:
+    def _insert_entry_index(self, key: Hashable, entry_index: SupportsIndex) -> bool:
         """
+        Insert an entry index corresponding to a given key into our hashtable
+
         Parameters
         ----------
-        :param key: A key to insert into the buckets. It is needed to compute hashes
-        :param entry_index: the entry index to insert
-        :return: True if a rehash has been triggered
+        key : Hashable
+            A key to insert into the buckets. It is needed to compute hashes
+        entry_index : SupportsIndex
+            The entry index to insert
+
+        Returns
+        -------
+        True
+            If a rehash has been triggered was triggered during insertion
+        False
+            Otherwise
         """
 
         if self._should_grow_table():
@@ -359,7 +437,7 @@ class CuckooHashTable(MutableMapping):
             self._rehashes = 0
 
     def try_insert_entry_index_into_specific_table(
-        self, key: Hashable, entry_index: int, table_index: int
+        self, key: Hashable, entry_index: SupportsIndex, table_index: int
     ) -> Optional[tuple[Hashable, SupportsIndex]]:
         """
         Try and insert an entry_index for the given key into the table represented by entry index.
@@ -368,12 +446,12 @@ class CuckooHashTable(MutableMapping):
 
         Parameters
         ----------
-        key         : Hashable
-                    A key to try and insert into self._tables[table_index]
-        entry_index :
-                    The index in self._entries of the entry we are inserting
-        table_index:
-                    The index in self._tables of the table we are inserting `entry_index` into
+        key : Hashable
+            A key to try and insert into self._tables[table_index]
+        entry_index : SupportsIndex
+            The index in self._entries of the entry we are inserting
+        table_index: int
+            The index in self._tables of the table we are inserting `entry_index` into
 
         Returns
         -------
@@ -384,7 +462,7 @@ class CuckooHashTable(MutableMapping):
                  if the insertion was unsuccessful. This entry index will be inserted in the next cycle
         """
 
-        bucket_index: int = self._hash_family(table_index, key, self.buckets_per_table)
+        bucket_index: int = self._hash_family(table_index, key, self._buckets_per_table)
         buckets: MutableSequence[SupportsIndex] = self._tables[table_index]
 
         if buckets[bucket_index] == CuckooHashTable.NO_ENTRY:
@@ -412,7 +490,7 @@ class CuckooHashTable(MutableMapping):
             self._max_insert_failures_log_constant * self._num_entries.bit_length(),
         )
 
-    def _insert(self, key: Hashable, entry_index: int) -> bool:
+    def _insert(self, key: Hashable, entry_index: SupportsIndex) -> bool:
         find_next = self._get_eviction_policy()
         max_insert_failures: int = self._get_max_insert_failures()
 
@@ -436,10 +514,10 @@ class CuckooHashTable(MutableMapping):
         # Rehash using a new hash function and recurse to try insert again.
         if expand:
             self._gen_tables()
-            # _rehashes counter must be reset here because this rehash is caused by an insertion request
+            # self._rehashes counter must be reset here because this rehash is caused by an expansion request
             self._rehashes = 0
         else:
-            self._gen_tables(self.buckets_per_table)
+            self._gen_tables(self._buckets_per_table)
 
         self._rehashes += 1
         self._hash_family.gen()
@@ -452,7 +530,7 @@ class CuckooHashTable(MutableMapping):
 
     def __delitem__(self, key: Hashable):
         for table_index, buckets in enumerate(self._tables):
-            bucket_index = self._hash_family(table_index, key, self.buckets_per_table)
+            bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
             entry_index: SupportsIndex = buckets[bucket_index]
             if self._entry_at_index_matches_key(entry_index, key):
                 buckets[bucket_index] = CuckooHashTable.NO_ENTRY  # type : ignore
@@ -488,6 +566,10 @@ class CuckooHashTable(MutableMapping):
 
 
 class CuckooHashTableDAry(CuckooHashTable):
+    """
+    This class represents a Dary CuckooHashTable where the number of tables is > 2
+    """
+
     DEFAULT_D: Final[int] = 4
 
     def __init__(
@@ -497,6 +579,12 @@ class CuckooHashTableDAry(CuckooHashTable):
             hash_family=hash_family or HashFamilyTabulation(self.DEFAULT_D),
             usable_fraction=usable_fraction,
         )
+
+    def _validate_number_of_tables(self):
+        if self._hash_family.size() < 3:
+            raise ValueError(
+                f"The size of the hash family must be >= 3: not {self._hash_family.size()}"
+            )
 
 
 class CuckooHashTableDAryRandomWalk(CuckooHashTableDAry):
@@ -535,26 +623,32 @@ class CuckooHashTableDAryRandomWalk(CuckooHashTableDAry):
 
 
 class CuckooHashTableBucketed(CuckooHashTable):
+    """
+    A variation of a cuckoo hash table which uses multiple slots in each bucket
+
+    Uses 2 slots per bucket by default
+    """
+
     DEFAULT_SLOTS_PER_BUCKET = 2
 
     __slots__ = "_slots_per_bucket"
 
-    def __init__(self, slots_per_bucket: Optional[int] = None):
-        self._slots_per_bucket = slots_per_bucket or self.DEFAULT_SLOTS_PER_BUCKET
+    def __init__(self, slots_per_bucket: int = DEFAULT_SLOTS_PER_BUCKET):
+        self._slots_per_bucket = slots_per_bucket
         super().__init__()
+
+    @property
+    def capacity(self):
+        return (
+            self._buckets_per_table * self._hash_family.size() * self._slots_per_bucket
+        )
 
     def _gen_tables(
         self, buckets_per_table: Optional[int] = None, growth_factor: float = 2
     ):
-        if buckets_per_table is None:
-            buckets_per_table = int(self.buckets_per_table * growth_factor)
-        capacity = buckets_per_table * self._hash_family.size() * self._slots_per_bucket
-
-        index = 0
-        while capacity >= item_sizes[index]:
-            index += 1
-
-        table = [array(type_codes[index]) for _ in range(buckets_per_table)]
+        self._update_buckets_per_table(buckets_per_table, growth_factor)
+        type_code = self._get_correct_type_code()
+        table = [array(type_code) for _ in range(self._buckets_per_table)]
         self._tables = (table,) + tuple(
             deepcopy(table) for _ in range(self._hash_family.size() - 1)
         )
@@ -562,7 +656,7 @@ class CuckooHashTableBucketed(CuckooHashTable):
     def _get_entry_specific_table(
         self, table_index: int, key: Hashable
     ) -> Optional[Entry]:
-        bucket_index = self._hash_family(table_index, key, self.buckets_per_table)
+        bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
         bucket = self._tables[table_index][bucket_index]
         for entry_index in bucket:
             if self._entries[entry_index].key_matches(key):
@@ -570,9 +664,9 @@ class CuckooHashTableBucketed(CuckooHashTable):
         return None
 
     def try_insert_entry_index_into_specific_table(
-        self, key, entry_index: int, table_index: int
+        self, key, entry_index: SupportsIndex, table_index: int
     ) -> Optional[tuple[Hashable, int]]:
-        bucket_index = self._hash_family(table_index, key, self.buckets_per_table)
+        bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
         bucket = self._tables[table_index][bucket_index]
 
         # all the slots in this bucket are occupied
@@ -593,12 +687,38 @@ class CuckooHashTableBucketed(CuckooHashTable):
         return None
 
     def __delitem__(self, key: Hashable):
-        for column_index, buckets in enumerate(self._tables):
-            bucket_index = self._hash_family(column_index, key, self.buckets_per_table)
-            bucket = buckets[bucket_index]
+        """
+        Delete key from the dictionary if key exists in the dictionary
+
+        Parameters
+        ----------
+        key : Hashable
+            The key to remove from the dictionary
+
+        Raises
+        ------
+        KeyError
+            If the key was not in the dictionary
+
+        Notes
+        -----
+
+        Deletes the key from the dictionary in O(d) steps by looping through the possible tables:
+        and deleting only if the key matches the key at the entry pointed to by entry index
+
+        Deletion happens by
+         1) removing the entry_index from the bucket
+         2) replacing the entry with TOMBSTONE
+
+        """
+        for table_index, table in enumerate(self._tables):
+            bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
+            bucket = table[bucket_index]
+
             for entry_index in bucket[:]:
                 if self._entry_at_index_matches_key(entry_index, key):
                     bucket.remove(entry_index)
                     self._remove_entry(entry_index)
                     return True
+
         raise KeyError(f"{key} not found")

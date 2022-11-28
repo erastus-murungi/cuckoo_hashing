@@ -3,9 +3,12 @@ import string
 
 import numpy as np
 
-from cuckoo_hash_table import (CuckooHashTable, CuckooHashTableBucketed,
-                               CuckooHashTableDAry,
-                               CuckooHashTableDAryRandomWalk)
+from cuckoo_hash_table import (
+    CuckooHashTable,
+    CuckooHashTableBucketed,
+    CuckooHashTableDAry,
+    CuckooHashTableDAryRandomWalk,
+)
 
 
 class TestCuckooHashTable:
