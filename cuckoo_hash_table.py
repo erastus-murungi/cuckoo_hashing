@@ -71,7 +71,7 @@ type_codes, item_sizes = ("b", "h", "l", "q"), (
     0x7FFFFFFFFFFFFFFF,
 )
 
-Index = MutableSequence[SupportsIndex]
+Index = array
 BucketIndex = list[Index]
 
 
@@ -259,7 +259,7 @@ class CuckooHashTable(MutableMapping):
         type_code = self._get_correct_type_code()
         table = array(type_code, [CuckooHashTable.NO_ENTRY]) * self._buckets_per_table
         # the type of self_tables can be
-        self._tables: tuple[Index, ...] | tuple[BucketIndex, ...] = (table,) + tuple(
+        self._tables: tuple[Index, ...] = (table,) + tuple(
             table[:] for _ in range(self._hash_family.size() - 1)
         )
 
@@ -438,7 +438,7 @@ class CuckooHashTable(MutableMapping):
 
     def try_insert_entry_index_into_specific_table(
         self, key: Hashable, entry_index: SupportsIndex, table_index: int
-    ) -> Optional[tuple[Hashable, SupportsIndex]]:
+    ) -> Optional[SupportsIndex]:
         """
         Try and insert an entry_index for the given key into the table represented by entry index.
         If unsuccessful, then evict some other entry index and return it in a tuple along with it's associated
@@ -457,7 +457,7 @@ class CuckooHashTable(MutableMapping):
         -------
         None
             If insertion was successful
-        tuple[Hashable, SupportIndex]
+        SupportIndex
             representing a key and entry index which was evicted
                  if the insertion was unsuccessful. This entry index will be inserted in the next cycle
         """
@@ -471,7 +471,7 @@ class CuckooHashTable(MutableMapping):
 
         evicted_entry_index = buckets[bucket_index]
         buckets[bucket_index] = entry_index
-        return self._entries[evicted_entry_index].key, evicted_entry_index
+        return evicted_entry_index
 
     def _get_eviction_policy(self) -> Callable[[int], int]:
         """
@@ -491,23 +491,44 @@ class CuckooHashTable(MutableMapping):
         )
 
     def _insert(self, key: Hashable, entry_index: SupportsIndex) -> bool:
+        """
+        Insert a key and an entry index into the hash table
+
+        Parameters
+        ----------
+        key : Hashable
+            The key corresponding to ``entry_index``
+        entry_index : SupportsIndex
+            The index in self._entries of the entry we are inserting
+
+        Returns
+        -------
+        True
+            If a rehash was triggered
+        False
+            Otherwise
+        """
+
         find_next = self._get_eviction_policy()
         max_insert_failures: int = self._get_max_insert_failures()
 
+        # we always start with the first table before moving to the others
         table_index = 0
         for _ in range(max_insert_failures):
-            evicted_key_entry_index = self.try_insert_entry_index_into_specific_table(
+            evicted_entry_index = self.try_insert_entry_index_into_specific_table(
                 key, entry_index, table_index
             )
-            if evicted_key_entry_index is None:
+            # if we did not evict any entry index,
+            # then we successfully inserted entry_index without rehashing
+            if evicted_entry_index is None:
                 return False
-            key, entry_index = evicted_key_entry_index
+
+            # prepare for another cycle of insertion
+            key, entry_index = self._entries[evicted_entry_index].key, evicted_entry_index
             table_index = find_next(table_index)
 
-        if self._rehashes >= self._allowed_rehash_attempts:
-            self._rehash(expand=True)
-        else:
-            self._rehash()
+        # we only expand the table if we have rehashed a certain number of times unsuccessfully
+        self._rehash(expand=self._rehashes >= self._allowed_rehash_attempts)
         return True
 
     def _rehash(self, *, expand: bool = False):
@@ -649,7 +670,7 @@ class CuckooHashTableBucketed(CuckooHashTable):
         self._update_buckets_per_table(buckets_per_table, growth_factor)
         type_code = self._get_correct_type_code()
         table = [array(type_code) for _ in range(self._buckets_per_table)]
-        self._tables = (table,) + tuple(
+        self._tables: tuple[BucketIndex, ...] = (table,) + tuple(  # type: ignore[assignment]
             deepcopy(table) for _ in range(self._hash_family.size() - 1)
         )
 
@@ -665,7 +686,7 @@ class CuckooHashTableBucketed(CuckooHashTable):
 
     def try_insert_entry_index_into_specific_table(
         self, key, entry_index: SupportsIndex, table_index: int
-    ) -> Optional[tuple[Hashable, int]]:
+    ) -> Optional[SupportsIndex]:
         bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
         bucket = self._tables[table_index][bucket_index]
 
@@ -675,10 +696,9 @@ class CuckooHashTableBucketed(CuckooHashTable):
             # should we use LRU approach here to take advantage of temporal locality?
             evicted_entry_index = bucket[-1]
             bucket[-1] = entry_index
-            entry = self._entries[evicted_entry_index]
 
-            if entry.is_alive():
-                return entry.key, evicted_entry_index
+            if self._entries[evicted_entry_index].is_alive():
+                return evicted_entry_index
             else:
                 # we don't expect to be harboring None values in our buckets at this point
                 # they should have been removed during the deletion process
