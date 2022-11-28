@@ -28,7 +28,7 @@ class HashFamily(ABC):
         pass
 
     @abstractmethod
-    def __call__(self, table_index: int, item: Hashable, table_size: int) -> int:
+    def __call__(self, table_index: int, item: Hashable, buckets_per_index: int) -> int:
         pass
 
     def size(self):
@@ -41,10 +41,10 @@ class HashFamilyModular(HashFamily):
         self.a = None
         self.b = None
 
-    def __call__(self, table_index, item, table_size):
+    def __call__(self, table_index, item, buckets_per_index):
         a, b = self.a[table_index], self.b[table_index]
         h = (a * hash(item) + b) & p
-        return h % table_size
+        return h % buckets_per_index
 
     def gen(self):
         self.a, self.b = gen_multiplier_increment_tuples(
@@ -72,12 +72,12 @@ class HashFamilyShift(HashFamily):
     def is_power_of_two(x: int) -> int:
         return not (x & (x - 1))
 
-    def __call__(self, table_index, item, table_size):
+    def __call__(self, table_index, item, buckets_per_index):
         assert self.is_power_of_two(
-            table_size
-        ), f"table size must be a power of 2, {table_size} is not"
+            buckets_per_index
+        ), f"table size must be a power of 2, {buckets_per_index} is not"
 
-        m = table_size.bit_length() - 1
+        m = buckets_per_index.bit_length() - 1
         mask = (1 << (WORD_SIZE + m)) - 1
         a, b = self.a[table_index], self.b[table_index]
         h = (a * hash(item) + b) & mask
@@ -94,7 +94,7 @@ class HashFamilyTabulation(HashFamily):
         super().__init__(size)
         self.tables: np.ndarray = np.empty(0)
 
-    def __call__(self, table_index: int, item: Hashable, table_size: int) -> int:
+    def __call__(self, table_index: int, item: Hashable, buckets_per_index: int) -> int:
         x = hash(item)
         h0 = x & 0xFF
         h1 = (x >> 8) & 0xFF
@@ -116,7 +116,7 @@ class HashFamilyTabulation(HashFamily):
                 ^ t[6][h6]
                 ^ t[7][h7]
             )
-            % table_size
+            % buckets_per_index
         )
 
     def gen(self):
@@ -143,11 +143,11 @@ class HashFamilyPolynomial(HashFamily):
             1, np.iinfo(np.uint64).max, dtype=np.uint64, size=self.k
         )
 
-    def __call__(self, table_index: int, item: Hashable, table_size: int) -> int:
+    def __call__(self, table_index: int, item: Hashable, buckets_per_index: int) -> int:
         hash_item = hash(item)
         xi = hash_item
         res = 0
         for coefficient in self.coefficients:
             res = res + (coefficient * xi) % p
             xi += hash_item
-        return res % table_size
+        return res % buckets_per_index

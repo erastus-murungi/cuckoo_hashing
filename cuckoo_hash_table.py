@@ -210,7 +210,8 @@ class CuckooHashTable(MutableMapping):
         # the capacity (total number of slots) in our hashtable
         return self._buckets_per_table * self._hash_family.size()
 
-    def _update_buckets_per_table(self, buckets_per_table, growth_factor):
+    def _update_buckets_per_table(self, buckets_per_table: Optional[int], growth_factor: float):
+        # updates _buckets_per_table to be the correct value
         self._buckets_per_table = (
             int(self._buckets_per_table * growth_factor)
             if buckets_per_table is None
@@ -258,7 +259,6 @@ class CuckooHashTable(MutableMapping):
         self._update_buckets_per_table(buckets_per_table, growth_factor)
         type_code = self._get_correct_type_code()
         table = array(type_code, [CuckooHashTable.NO_ENTRY]) * self._buckets_per_table
-        # the type of self_tables can be
         self._tables: tuple[Index, ...] = (table,) + tuple(
             table[:] for _ in range(self._hash_family.size() - 1)
         )
@@ -295,7 +295,7 @@ class CuckooHashTable(MutableMapping):
 
         Parameters
         ----------
-        entry_inde x: SupportsIndex
+        entry_index: SupportsIndex
             The index in self._entries of the entry we are inserting
 
         Returns
@@ -524,7 +524,10 @@ class CuckooHashTable(MutableMapping):
                 return False
 
             # prepare for another cycle of insertion
-            key, entry_index = self._entries[evicted_entry_index].key, evicted_entry_index
+            key, entry_index = (
+                self._entries[evicted_entry_index].key,
+                evicted_entry_index,
+            )
             table_index = find_next(table_index)
 
         # we only expand the table if we have rehashed a certain number of times unsuccessfully
@@ -550,13 +553,15 @@ class CuckooHashTable(MutableMapping):
                 return
 
     def __delitem__(self, key: Hashable):
-        for table_index, buckets in enumerate(self._tables):
+        for table_index, table in enumerate(self._tables):
             bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
-            entry_index: SupportsIndex = buckets[bucket_index]
+            entry_index: SupportsIndex = table[bucket_index]
+
             if self._entry_at_index_matches_key(entry_index, key):
-                buckets[bucket_index] = CuckooHashTable.NO_ENTRY  # type : ignore
+                table[bucket_index] = CuckooHashTable.NO_ENTRY
                 self._remove_entry(entry_index)
                 return True
+
         raise KeyError(f"{key} not found")
 
     def _enumerate_entries(self):
@@ -679,9 +684,11 @@ class CuckooHashTableBucketed(CuckooHashTable):
     ) -> Optional[Entry]:
         bucket_index = self._hash_family(table_index, key, self._buckets_per_table)
         bucket = self._tables[table_index][bucket_index]
+
         for entry_index in bucket:
-            if self._entries[entry_index].key_matches(key):
+            if self._entry_at_index_matches_key(entry_index, key):
                 return self._entries[entry_index]
+
         return None
 
     def try_insert_entry_index_into_specific_table(
