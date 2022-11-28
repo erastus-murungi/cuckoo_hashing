@@ -12,7 +12,7 @@ WORD_SIZE: Final[int] = 64  # word size
 def gen_multiplier_increment_tuples(
     count: int, multiplier_gen: Callable[[], int]
 ) -> set[tuple[int, int]]:
-    tuples = set()
+    tuples: set[tuple[int, int]] = set()
     while len(tuples) != count:
         increment = random.randint(0, p)
         tuples.add((multiplier_gen(), increment))
@@ -92,7 +92,7 @@ class HashFamilyShift(HashFamily):
 class HashFamilyTabulation(HashFamily):
     def __init__(self, size: int):
         super().__init__(size)
-        self.tables = None
+        self.tables: np.ndarray = np.empty(0)
 
     def __call__(self, column_index: int, item: Hashable, table_size: int) -> int:
         x = hash(item)
@@ -135,7 +135,7 @@ class HashFamilyPolynomial(HashFamily):
 
     def __init__(self, size: int, k: int = 3):
         super().__init__(size)
-        self.coefficients = None
+        self.coefficients = np.empty(0)
         self.k = k
 
     def gen(self):

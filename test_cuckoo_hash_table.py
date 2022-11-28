@@ -5,9 +5,9 @@ import numpy as np
 
 from cuckoo_hash_table import (
     CuckooHashTable,
-    CuckooHashTableDAryRandomWalk,
-    CuckooHashTableDAry,
     CuckooHashTableBucketed,
+    CuckooHashTableDAry,
+    CuckooHashTableDAryRandomWalk,
 )
 
 
