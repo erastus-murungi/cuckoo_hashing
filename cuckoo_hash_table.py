@@ -773,7 +773,11 @@ class CuckooHashTableStashed(CuckooHashTable):
 
     __slots__ = ("_stash", "_max_stash_size", "_should_try_insert_stashed_keys")
 
-    def __init__(self, max_stash_size: int = 10):
+    def __init__(
+        self,
+        max_stash_size: int = 10,
+        hash_family: HashFamily = HashFamilyTabulation(2),
+    ):
         """
 
         Notes
@@ -794,7 +798,7 @@ class CuckooHashTableStashed(CuckooHashTable):
         SIAM Journal on Computing, 39(4).
 
         """
-        super().__init__()
+        super().__init__(hash_family=hash_family)
         self._stash: list[SupportsIndex] = []
         self._max_stash_size: int = max_stash_size
         self._should_try_insert_stashed_keys: bool = False
@@ -862,3 +866,10 @@ class CuckooHashTableStashed(CuckooHashTable):
             self._insert_entry_index(key, len(self._entries) - 1)
             self._try_insert_stashed_keys()
             self._rehashes = 0
+
+
+class CuckooHashTableStashedDAry(CuckooHashTableStashed):
+    def __init__(self, d=CuckooHashTableDAry.DEFAULT_D):
+        super().__init__(hash_family=HashFamilyTabulation(d))
+
+    _validate_number_of_tables = CuckooHashTableDAry._validate_number_of_tables
